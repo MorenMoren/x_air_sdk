@@ -1,0 +1,29 @@
+# 胸部相机配置
+cam_chest:
+  ros__parameters:
+    camera_name: "cam_chest"
+    serial_no: ""  # 在 launch 文件中设置
+    device_type: "d435"
+    
+    # RGB 配置
+    enable_color: true
+    rgb_camera.profile: "1280x720x30"
+    rgb_camera.color_format: "RGB8"
+    
+    # 深度配置
+    enable_depth: true
+    depth_module.profile: "1280x720x30"
+    depth_module.depth_format: "Z16"
+    
+    # 对齐
+    align_depth.enable: true
+    
+    # TF
+    publish_tf: true
+    tf_publish_rate: 0.0
+    
+    # 其他
+    enable_gyro: false
+    enable_accel: false
+    enable_infra1: false
+    enable_infra2: false

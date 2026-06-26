@@ -1,0 +1,138 @@
+﻿# Inertial parameters from calibrated data.txt
+# Updated: 2026-02-04
+
+link0:
+  origin:
+    x: -0.00084789
+    y: 0.00059780
+    z: 0.02812040
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 1.04987979
+  inertia:
+    xx: 0.001128
+    xy: -4.0e-06
+    xz: -3.3e-05
+    yy: 0.000962
+    yz: -7.0e-06
+    zz: 0.00147
+
+link1:
+  origin:
+    x: 0.00055818
+    y: 0.00000000
+    z: 0.05462243
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 1.01475135
+  inertia:
+    xx: 0.001567
+    xy: -1.0e-06
+    xz: -2.9e-05
+    yy: 0.001273
+    yz: 1.0e-06
+    zz: 0.001016
+
+link2:
+  origin:
+    x: 0.00551535
+    y: 0.00000000
+    z: 0.03269380
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 0.24975837
+  inertia:
+    xx: 0.000359
+    xy: 1.0e-06
+    xz: -0.000109
+    yy: 0.000376
+    yz: 1.0e-06
+    zz: 0.000232
+
+link3:
+  origin:
+    x: -0.00140009
+    y: -0.00018167
+    z: 0.08957722
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 0.98186876
+  inertia:
+    xx: 0.004372
+    xy: 1.0e-06
+    xz: 1.1e-05
+    yy: 0.004319
+    yz: -3.6e-05
+    zz: 0.000661
+
+link4:
+  origin:
+    x: -0.00113860
+    y: -0.02799240
+    z: 0.06181745
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 0.48388085
+  inertia:
+    xx: 0.000623
+    xy: -1.0e-06
+    xz: -1.9e-05
+    yy: 0.000511
+    yz: 3.8e-05
+    zz: 0.000334
+
+link5:
+  origin:
+    x: -0.00501171
+    y: 0.00053183
+    z: 0.04332461
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 0.48186347
+  inertia:
+    xx: 0.000423
+    xy: -8.0e-06
+    xz: 6.0e-06
+    yy: 0.000445
+    yz: -6.0e-06
+    zz: 0.000324
+
+link6:
+  origin:
+    x: -0.03418701
+    y: -0.00031211
+    z: 0.00030597
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 0.39169013
+  inertia:
+    xx: 0.000143
+    xy: 1.0e-06
+    xz: 1.0e-06
+    yy: 0.000157
+    yz: 1.0e-06
+    zz: 0.000159
+
+link7:
+  origin:
+    x: -0.00010022
+    y: 0.00316862
+    z: 0.06209985
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+  mass: 0.42999880
+  inertia:
+    xx: 0.000639
+    xy: 1.0e-06
+    xz: 1.0e-06
+    yy: 0.000497
+    yz: 8.9e-05
+    zz: 0.000342

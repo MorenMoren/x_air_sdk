@@ -1,0 +1,8 @@
+build/
+install/
+log/
+.vscode/
+outputs/
+jitter*/
+outputs*/
+src/xarm_can/python/subprojects/

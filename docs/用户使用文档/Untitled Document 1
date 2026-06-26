@@ -1,0 +1,36 @@
+cd x_air_sdk/publish/xarm_can/package/libexec
+bash setup_can_interfaces.sh
+
+
+g++ -std=c++17 \
+x_air_sdk/publish/xarm_can/package/examples/sdk_cpp_basic_test.cpp \
+-I publish/xarm_can/package/include \
+-L publish/xarm_can/package/lib \
+-Wl,-rpath,publish/xarm_can/package/lib \
+-lxarm_can_sdk \
+-o /tmp/sdk_cpp_basic_test
+
+ldd /tmp/sdk_cpp_basic_test | grep xarm
+
+/tmp/sdk_cpp_basic_test can1 1 12 0.20
+
+
+
+
+cd ~/x_air_sdk/publish/xarm_can/package/examples
+
+python3 x_air_sdk/publish/xarm_can/package/examples/sdk_python_basic_test.py \
+--sdk x_air_sdk/publish/xarm_can/package/lib/libxarm_can_sdk.so \
+--can can2 \
+--fd \
+--seconds 12 \
+--amp 0.20
+
+
+
+ip -details link show can0 | grep bitrate   
+	  bitrate 1000000 sample-point 0.740 
+	  dbitrate 5000000 dsample-point 0.700 
+	 
+
+can1-can4

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>xarm_teleop</name>
+  <version>1.0.0</version>
+  <description>XArm teleoperation control library with optional ROS2 support</description>
+  
+  <maintainer email="shiyu@vlai.cn">vlai</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ROS2 dependencies (optional) -->
+  <depend>std_srvs</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <!-- System dependencies -->
+  <depend>eigen</depend>
+  <depend>yaml-cpp</depend>
+  <depend>urdfdom</depend>
+  <depend>orocos_kdl</depend>
+  <depend>kdl_parser</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>teleop_pad_bridge</name>
+  <version>0.1.0</version>
+  <description>桥接节点 — 订阅 /pad_control，拆分发布到各执行话题</description>
+  <maintainer email="wangzhangming@example.com">wangzhangming</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>teleop_pad_msg</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
