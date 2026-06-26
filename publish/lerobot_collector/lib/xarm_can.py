@@ -299,12 +299,55 @@ def _decode_dm_state(data: bytes, limits: Tuple[float, float, float]) -> Tuple[f
     return pos, vel, tor
 
 
+# MIT command gain limits — read verbatim from the SDK binary (CanPacketEncoder
+# pack_mit_control_data uses kp in [0, 500], kd in [0, 5]).
+_KP_MAX = 500.0
+_KD_MAX = 5.0
+
+
+def _float_to_uint(x: float, lo: float, hi: float, bits: int) -> int:
+    """Physical value → DM-motor fixed-point (matches SDK double_to_uint)."""
+    if hi <= lo:
+        return 0
+    span = (1 << bits) - 1
+    x = lo if x < lo else (hi if x > hi else x)  # clamp into range
+    return int(round((x - lo) * span / (hi - lo))) & span
+
+
+def _encode_dm_mit(kp: float, kd: float, pos: float, vel: float, torque: float,
+                   limits: Tuple[float, float, float]) -> bytes:
+    """Encode an 8-byte DM MIT-control payload (matches SDK pack_mit_control_data)."""
+    p_max, v_max, t_max = limits
+    kp_r  = _float_to_uint(kp, 0.0, _KP_MAX, 12)
+    kd_r  = _float_to_uint(kd, 0.0, _KD_MAX, 12)
+    pos_r = _float_to_uint(pos, -p_max, p_max, 16)
+    vel_r = _float_to_uint(vel, -v_max, v_max, 12)
+    tor_r = _float_to_uint(torque, -t_max, t_max, 12)
+    return bytes((
+        (pos_r >> 8) & 0xFF,
+        pos_r & 0xFF,
+        (vel_r >> 4) & 0xFF,
+        ((vel_r & 0x0F) << 4) | ((kp_r >> 8) & 0x0F),
+        kp_r & 0xFF,
+        (kd_r >> 4) & 0xFF,
+        ((kd_r & 0x0F) << 4) | ((tor_r >> 8) & 0x0F),
+        tor_r & 0xFF,
+    ))
+
+
 class _PassiveCANBackend:
-    """Raw AF_CAN socket that passively decodes DM STATE frames.
+    """Raw AF_CAN socket: passively decodes DM STATE frames, and (optionally)
+    sends DM MIT-control command frames — all without an SDK handle.
 
     Owns no motors of its own; XArm registers (recv_id → _Motor, limits) pairs
     so that draining the socket updates the same _Motor objects the public API
-    hands out.
+    hands out. It also records each motor's send_id + limits (in registration
+    order) so MIT commands can be encoded and written straight to the bus.
+
+    This is what lets a second process (data collector OR go_home) coexist with
+    a teleop process: the kernel broadcasts every RX frame to all bound sockets,
+    and accepts TX frames from any of them. The blocking SDK recv path is never
+    used, so there is no init-handshake hang.
     """
 
     def __init__(self, can_if: str, fd: bool = True):
@@ -312,6 +355,9 @@ class _PassiveCANBackend:
         self._fd = fd
         # recv_id -> (motor, (p_max, v_max, t_max))
         self._targets: Dict[int, Tuple["_Motor", Tuple[float, float, float]]] = {}
+        # ordered send-side info: list of (send_id, (p_max, v_max, t_max))
+        self._arm_send: List[Tuple[int, Tuple[float, float, float]]] = []
+        self._gripper_send: Optional[Tuple[int, Tuple[float, float, float]]] = None
 
         self._sock = socket.socket(_PF_CAN, socket.SOCK_RAW, _CAN_RAW)
         if fd:
@@ -326,9 +372,42 @@ class _PassiveCANBackend:
             raise RuntimeError(f"passive bind('{can_if}') failed: {e}") from e
         self._sock.setblocking(False)
 
-    def register(self, recv_id: int, motor: "_Motor", motor_type: int):
+    def register(self, recv_id: int, motor: "_Motor", motor_type: int,
+                 send_id: Optional[int] = None, is_gripper: bool = False):
         limits = _MOTOR_LIMIT_PARAMS.get(int(motor_type), (12.5, 50.0, 5.0))
         self._targets[int(recv_id) & _CAN_EFF_MASK] = (motor, limits)
+        if send_id is not None:
+            if is_gripper:
+                self._gripper_send = (int(send_id), limits)
+            else:
+                self._arm_send.append((int(send_id), limits))
+
+    def _write_frame(self, can_id: int, payload: bytes):
+        """Write one classic 8-byte CAN frame (struct can_frame, 16 bytes)."""
+        if self._sock is None:
+            return
+        data = payload[:8].ljust(8, b"\x00")
+        frame = struct.pack("<IB3x8s", can_id & _CAN_SFF_MASK, len(payload[:8]), data)
+        try:
+            self._sock.send(frame)
+        except OSError:
+            pass
+
+    def send_mit_arm(self, params: List["MITParam"]):
+        """Encode + send one MIT command frame per arm motor (registration order)."""
+        for i, p in enumerate(params):
+            if i >= len(self._arm_send):
+                break
+            send_id, limits = self._arm_send[i]
+            payload = _encode_dm_mit(p.kp, p.kd, p.pos, p.vel, p.torque, limits)
+            self._write_frame(send_id, payload)
+
+    def send_mit_gripper(self, param: "MITParam"):
+        if self._gripper_send is None:
+            return
+        send_id, limits = self._gripper_send
+        payload = _encode_dm_mit(param.kp, param.kd, param.pos, param.vel, param.torque, limits)
+        self._write_frame(send_id, payload)
 
     def drain(self, timeout_us: int = 2000):
         """Read all currently-available frames, keep the newest per motor, decode."""
@@ -446,7 +525,9 @@ class _ArmSubsystem:
 
     def mit_control_all(self, params: List[MITParam]):
         if self._xarm._passive:
-            raise RuntimeError("mit_control_all() is not allowed in passive (read-only) mode")
+            # SDK-less raw send: encode and write MIT frames straight to the bus.
+            self._xarm._backend.send_mit_arm(params)
+            return
         sdk = _get_sdk()
         n = len(params)
         c_arr = (_CMitParam * n)(*[p._to_c() for p in params])
@@ -472,7 +553,10 @@ class _GripperSubsystem:
 
     def mit_control_all(self, params: List[MITParam]):
         if self._xarm._passive:
-            raise RuntimeError("mit_control_all() is not allowed in passive (read-only) mode")
+            # SDK-less raw send: one frame per param to the gripper send_id.
+            for p in params:
+                self._xarm._backend.send_mit_gripper(p)
+            return
         sdk = _get_sdk()
         for p in params:
             c_param = p._to_c()
@@ -499,9 +583,26 @@ class XArm:
         arm.recv_all()
     """
 
-    def __init__(self, can_if: str, fd: bool = True):
+    def __init__(self, can_if: str, fd: bool = True, passive: Optional[bool] = None):
+        """Create an XArm CAN interface.
+
+        passive:
+            None  → use the module-level default (set_passive_mode / XARM_CAN_PASSIVE)
+            True  → SDK-less raw socket: sniff STATE frames for reads and write
+                    MIT command frames directly for sends. Never owns an SDK
+                    handle and never uses the blocking SDK recv path, so it
+                    coexists with a teleop process on the same bus without the
+                    init-handshake hang. Cannot enable/disable motors (teleop
+                    already enabled them).
+            False → active: own an SDK handle (full control incl. enable/disable).
+
+        NOTE: passive is per-instance. A single process can hold active objects
+        and passive objects at the same time. The data collector's CANArmReader
+        uses passive (read), and go_home's LeaderCANController uses passive
+        (read current pos + send MIT to drive the leader) — both while teleop runs.
+        """
         self._can_if = can_if
-        self._passive = _PASSIVE_MODE
+        self._passive = _PASSIVE_MODE if passive is None else bool(passive)
         self._backend: Optional[_PassiveCANBackend] = None
         self._handle = c_void_p()
 
@@ -537,10 +638,13 @@ class XArm:
         self._arm_motor_count = n
 
         if self._passive:
-            # No SDK call — just map each motor's recv_id so the backend can
-            # route incoming STATE frames to the right _Motor object.
+            # No SDK call — map each motor's recv_id (for STATE routing) and
+            # send_id (for MIT command encoding) into the raw backend.
             for i in range(n):
-                self._backend.register(recv_ids[i], self._arm._motors[i], int(motor_types[i]))
+                self._backend.register(
+                    recv_ids[i], self._arm._motors[i], int(motor_types[i]),
+                    send_id=send_ids[i],
+                )
             return
 
         sdk = _get_sdk()
@@ -563,7 +667,10 @@ class XArm:
         self._has_gripper = True
 
         if self._passive:
-            self._backend.register(recv_id, self._gripper._motors[0], int(motor_type))
+            self._backend.register(
+                recv_id, self._gripper._motors[0], int(motor_type),
+                send_id=send_id, is_gripper=True,
+            )
             return
 
         sdk = _get_sdk()
