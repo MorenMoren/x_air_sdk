@@ -6,3 +6,9 @@ outputs/
 jitter*/
 outputs*/
 src/xarm_can/python/subprojects/
+# 二进制 patch 备份
+*.bak_*
+
+# Python 字节码
+__pycache__/
+*.pyc

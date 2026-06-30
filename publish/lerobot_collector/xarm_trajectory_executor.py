@@ -116,27 +116,33 @@ class LeaderCANController:
         self._connected = False
 
     def connect(self) -> bool:
-        """连接Leader CAN — 轻量初始化, 不调用enable_all (遥操已使能)"""
+        """连接Leader CAN — passive 模式 (SDK-less 原生 socket)
+
+        遥操进程已独占该 CAN 接口的 SDK handle，第二个进程再走 SDK 的
+        recv_all 会永久阻塞在初始化握手上。因此这里用 passive 模式：
+        读位置靠被动嗅探 STATE 帧，发命令靠直接写原生 CAN 帧，全程不碰
+        阻塞的 SDK，可与遥操共存。
+        """
         try:
-            self.logger.info(f"🔌 连接 Leader CAN: {self.can_if}")
+            self.logger.info(f"🔌 连接 Leader CAN: {self.can_if} (passive)")
 
-            # 创建CAN对象 (打开socket, 不重配CAN接口参数)
-            self.arm = oa.XArm(self.can_if, True)
+            # passive=True: 原生 socket, 不创建 SDK handle, 不阻塞
+            self.arm = oa.XArm(self.can_if, True, passive=True)
 
-            # 初始化电机对象 (SDK内部数据结构, 不发送CAN命令)
+            # 初始化电机对象 (登记 send_id/recv_id, 不发送 CAN 命令)
             self.arm.init_arm_motors(MOTOR_TYPES, SEND_IDS, RECV_IDS)
 
-            # ★ 不调用 enable_all() — 电机已由遥操使能, 重复使能会冲突
-            # ★ 不调用 set_callback_mode_all() — 不需要回调
+            # ★ 不调用 enable_all() — 电机已由遥操使能
+            # ★ passive 模式下 recv_all 是非阻塞的 socket drain
 
-            # 验证连接: 尝试读取电机状态
-            self.arm.recv_all()
-            self.arm.refresh_all()
-            self.arm.recv_all()
+            # 预热: 嗅探几轮 STATE 帧填充位置缓存
+            for _ in range(10):
+                self.arm.recv_all()
+                time.sleep(0.02)
 
             motors = self.arm.get_arm().get_motors()
-            if motors:
-                positions = [m.get_position() for m in motors]
+            positions = [m.get_position() for m in motors]
+            if any(abs(p) > 1e-6 for p in positions):
                 self.logger.info(
                     f"✅ Leader CAN 连接成功 | "
                     f"关节: [{', '.join(f'{p:.3f}' for p in positions[:4])}...]"
@@ -144,8 +150,14 @@ class LeaderCANController:
                 self._connected = True
                 return True
             else:
-                self.logger.error("❌ 无法读取Leader电机状态")
-                return False
+                # 全零: 可能遥操未运行 / 接口无数据。仍标记连接以便发命令，
+                # 但提示用户检查。
+                self.logger.warning(
+                    f"⚠️  Leader CAN {self.can_if} 嗅探到的关节位置全为 0，"
+                    "请确认遥操脚本正在运行"
+                )
+                self._connected = True
+                return True
 
         except Exception as e:
             self.logger.error(f"❌ Leader CAN 连接失败: {e}")
@@ -437,8 +449,8 @@ def dualarm_home():
 
     # 双臂配置
     arm_configs = {
-        'left_arm':  {'can': 'can1', 'home': DEFAULT_HOME_POSITION_LIST['left_arm']},
-        'right_arm': {'can': 'can2', 'home': DEFAULT_HOME_POSITION_LIST['right_arm']},
+        'left_arm':  {'can': 'can0', 'home': DEFAULT_HOME_POSITION_LIST['left_arm']},
+        'right_arm': {'can': 'can1', 'home': DEFAULT_HOME_POSITION_LIST['right_arm']},
     }
 
     controllers = {}

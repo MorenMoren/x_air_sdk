@@ -37,6 +37,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import Trigger
 import numpy as np
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -100,20 +101,21 @@ from evdev import InputDevice, categorize, ecodes
 from xarm_trajectory_executor import *
 
 # xarm_can — CAN 总线直读机械臂关节和夹爪数据
-sys.path.append(r"/home/nvidia/x_air_sdk/publish/lerobot_collector/lib")
+#sys.path.append(r"/home/nvidia/x_air_sdk/publish/lerobot_collector/lib")
 # import ctypes
 
 # # 1. 加载 .so 库
 # # 确保路径正确，如果是当前目录可以写 './libxarm_can_sdk.so'
 # ctypes.CDLL('/home/nvidia/x_air_sdk/publish/lerobot_collector/lib/libxarm_can_sdk.so')
-import xarm_can as oa
+#import xarm_can as oa
 
 # 采集程序与遥操脚本并行运行，遥操进程已独占 CAN 接口的 SDK handle。
 # 第二个进程再调用 xarm_sdk_create() 会卡死在 SDK 初始化握手上。
-# 因此这里启用 passive 模式：用原生 AF_CAN socket 被动嗅探遥操已经触发的
-# STATE 反馈帧，自己解码关节/夹爪位置，不创建 SDK handle、不向总线发任何帧。
-# import / XArm / init_arm_motors / recv_all / get_position 等接口保持不变。
-oa.set_passive_mode(True)
+# 因此采集用的 CANArmReader 以 passive 模式创建 XArm (oa.XArm(..., passive=True))：
+# 用原生 AF_CAN socket 被动嗅探遥操已经触发的 STATE 反馈帧，自己解码关节/夹爪
+# 位置，不创建 SDK handle、不向总线发任何帧。
+# 注意: passive 是 *每实例* 的开关，不是全局的 —— 同一进程里 go_home 用的
+# LeaderCANController 仍以 active 模式创建 XArm，可以正常发送 MIT 命令。
 
 
 # ==============================================================================
@@ -173,7 +175,7 @@ class CANArmReader:
         try:
             self._logger.info(f"🔌 连接 {self.name} CAN: {self.can_if}")
 
-            self.arm = oa.XArm(self.can_if, True)  # True = CAN-FD
+            self.arm = oa.XArm(self.can_if, True, passive=True)  # True = CAN-FD, passive = 只读嗅探
 
             # 初始化 7 个关节电机
             self.arm.init_arm_motors(MOTOR_TYPES, SEND_IDS, RECV_IDS)
@@ -407,6 +409,13 @@ class XArmROSCollector(Node):
         }
         self._can_readers: Dict[str, CANArmReader] = {}
         self._init_can_readers()
+
+        # --- 归位服务客户端 ---
+        # 通过 teleop 内置的 /robot_go_home 服务归位:
+        # teleop 进程拥有电机的真正控制权,会先暂停遥操线程再平滑回零,
+        # 全程只有一个控制器在发命令,避免独立进程发 MIT 命令与遥操争抢
+        # 总线导致的电机异响。
+        self._home_client = self.create_client(Trigger, 'robot_go_home')
 
         # 当前帧数据缓存
         #   observation.state: 16维 (左从臂 7关节+夹爪 + 右从臂 7关节+夹爪)
@@ -1081,9 +1090,7 @@ class XArmROSCollector(Node):
             pre_time = self.get_clock().now()
             image_frames = self._read_camera_frames()
             post_time = self.get_clock().now()
-            self.get_logger().info(
-                 f"RGB time consuming {(post_time - pre_time).nanoseconds / 1e6:.1f} ms"
-             )
+            
             can_ok = self._collect_can_frame()
             if not can_ok:
                 self.get_logger().warn(
@@ -1189,13 +1196,49 @@ class XArmROSCollector(Node):
                     self.is_recording = False
                 
 
-    def _go_home(self) -> bool:
-        """调用双臂归位 (通过 CAN 发送 MIT 命令)"""
+    def _go_home(self, timeout_sec: float = 30.0) -> bool:
+        """调用 teleop 的 /robot_go_home 服务归位
+
+        相比独立进程发 MIT 命令 (dualarm_home),走服务由 teleop 自己执行归位:
+        它拥有电机控制权,会先暂停遥操再平滑回零,无总线争抢、无电机异响。
+
+        注意: 本方法在键盘监听 daemon 线程中调用,主线程在 rclpy.spin();
+        因此用 call_async + 等待 future,由 spin 线程处理响应 (同步 .call()
+        会与 spin 抢 GIL/执行器导致死锁)。
+        """
         try:
-            self.get_logger().info("🏠 Calling dualarm_home()...")
-            dualarm_home()
-            self.get_logger().info("🏠 robot go home success")
-            return True
+            # 等待服务可用 (teleop 必须正在运行)
+            if not self._home_client.wait_for_service(timeout_sec=3.0):
+                self.get_logger().error(
+                    "❌ /robot_go_home 服务不可用,请确认 teleop 正在运行"
+                )
+                return False
+
+            self.get_logger().info("🏠 Calling /robot_go_home service...")
+            future = self._home_client.call_async(Trigger.Request())
+
+            # 在 daemon 线程里阻塞等待 future,由主线程的 spin 完成它
+            start = time.time()
+            while not future.done():
+                if time.time() - start > timeout_sec:
+                    self.get_logger().error(
+                        f"❌ /robot_go_home 超时 ({timeout_sec}s)"
+                    )
+                    return False
+                time.sleep(0.02)
+
+            resp = future.result()
+            if resp is not None and resp.success:
+                self.get_logger().info(
+                    f"🏠 robot go home success"
+                    + (f": {resp.message}" if resp.message else "")
+                )
+                return True
+            else:
+                msg = resp.message if resp is not None else "no response"
+                self.get_logger().error(f"❌ /robot_go_home 失败: {msg}")
+                return False
+
         except Exception as e:
             self.get_logger().error(f"❌ Error calling home: {str(e)}")
             return False
